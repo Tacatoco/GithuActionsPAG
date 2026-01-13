@@ -10,11 +10,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Descargar el código
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # 2. Configurar Java 21
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -22,15 +20,15 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      # 3. Construir y Testear (Aquí es donde fallaba si no tenía los secrets)
-      - name: Build and test with Maven
+      # CORRECCIÓN 1: Pasar los secrets al paso de BUILD
+      # Si no los pasas aquí, 'mvn package' falla en GitHub al intentar el test de contexto.
+      - name: Build with Maven
         env:
           DB_ENDPOINT: ${{ secrets.DB_ENDPOINT }}
           DB_USERNAME: ${{ secrets.DB_USERNAME }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: mvn clean package
 
-      # 4. Copiar el archivo .war a la instancia EC2
       - name: Copy .war to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -41,7 +39,6 @@ jobs:
           target: "/home/ubuntu/"
           strip_components: 1
 
-      # 5. Configurar EC2 y desplegar
       - name: Configure environment variables and deploy
         uses: appleboy/ssh-action@master
         with:
@@ -49,20 +46,15 @@ jobs:
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_PRIVATE_KEY }}
           script: |
-            # Crear archivo de variables para que el sistema las tenga
+            # CORRECCIÓN 2: Uso de tee -a con sudo para persistencia correcta
             echo "DB_ENDPOINT=${{ secrets.DB_ENDPOINT }}" | sudo tee -a /etc/environment
             echo "DB_USERNAME=${{ secrets.DB_USERNAME }}" | sudo tee -a /etc/environment
             echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" | sudo tee -a /etc/environment
-            
-            # Recargar variables
-            export $(cat /etc/environment | xargs)
 
-            # Mover el archivo a la carpeta de Tomcat
+            # CORRECCIÓN 3: Despliegue en la ruta correcta de Tomcat 10
+            # Asegúrate de que el nombre del .war coincida con el generado en el build
             sudo mv /home/ubuntu/demo-0.0.1-SNAPSHOT.war /var/lib/tomcat10/webapps/demo.war
-
-            # Permisos para Tomcat
+            
             sudo chown tomcat:tomcat /var/lib/tomcat10/webapps/demo.war
             sudo chmod 755 /var/lib/tomcat10/webapps/demo.war
-
-            # Reiniciar servicio
             sudo systemctl restart tomcat10
