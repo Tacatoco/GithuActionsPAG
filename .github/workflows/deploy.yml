@@ -10,19 +10,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Descargar el código
       - name: Checkout source code
         uses: actions/checkout@v4
 
+      # 2. Configurar Java 21
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: 'maven' # Optimiza la velocidad de compilación
+          cache: 'maven'
 
+      # 3. Construir y Testear (Aquí es donde fallaba si no tenía los secrets)
       - name: Build and test with Maven
+        env:
+          DB_ENDPOINT: ${{ secrets.DB_ENDPOINT }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: mvn clean package
 
+      # 4. Copiar el archivo .war a la instancia EC2
       - name: Copy .war to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -33,6 +41,7 @@ jobs:
           target: "/home/ubuntu/"
           strip_components: 1
 
+      # 5. Configurar EC2 y desplegar
       - name: Configure environment variables and deploy
         uses: appleboy/ssh-action@master
         with:
@@ -40,18 +49,20 @@ jobs:
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_PRIVATE_KEY }}
           script: |
-            # 1. Crear un archivo de variables de entorno limpio para la app
-            # Esto evita duplicados en /etc/environment
-            echo "DB_ENDPOINT=${{ secrets.DB_ENDPOINT }}" > .env
-            echo "DB_USERNAME=${{ secrets.DB_USERNAME }}" >> .env
-            echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
+            # Crear archivo de variables para que el sistema las tenga
+            echo "DB_ENDPOINT=${{ secrets.DB_ENDPOINT }}" | sudo tee -a /etc/environment
+            echo "DB_USERNAME=${{ secrets.DB_USERNAME }}" | sudo tee -a /etc/environment
+            echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" | sudo tee -a /etc/environment
+            
+            # Recargar variables
+            export $(cat /etc/environment | xargs)
 
-            # 2. Mover el archivo .war a Tomcat
+            # Mover el archivo a la carpeta de Tomcat
             sudo mv /home/ubuntu/demo-0.0.1-SNAPSHOT.war /var/lib/tomcat10/webapps/demo.war
 
-            # 3. Ajustar permisos
+            # Permisos para Tomcat
             sudo chown tomcat:tomcat /var/lib/tomcat10/webapps/demo.war
             sudo chmod 755 /var/lib/tomcat10/webapps/demo.war
 
-            # 4. Reiniciar Tomcat
+            # Reiniciar servicio
             sudo systemctl restart tomcat10
