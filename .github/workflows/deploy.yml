@@ -3,16 +3,18 @@ name: Deploy Spring Boot to EC2 (Ubuntu)
 on:
   push:
     branches:
-      - main
+      - main  # Se activa al hacer push a la rama main
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Descargar el código fuente
       - name: Checkout source code
         uses: actions/checkout@v4
 
+      # 2. Configurar el entorno de Java 21
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -20,15 +22,17 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      # CORRECCIÓN 1: Pasar los secrets al paso de BUILD
-      # Si no los pasas aquí, 'mvn package' falla en GitHub al intentar el test de contexto.
-      - name: Build with Maven
+      # 3. Construir el proyecto
+      # IMPORTANTE: Aquí añadimos 'env' para que los tests de Spring Boot 
+      # puedan cargar el contexto de la base de datos correctamente.
+      - name: Build and test with Maven
         env:
           DB_ENDPOINT: ${{ secrets.DB_ENDPOINT }}
           DB_USERNAME: ${{ secrets.DB_USERNAME }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: mvn clean package
 
+      # 4. Copiar el archivo generado (.war) a la instancia EC2
       - name: Copy .war to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -39,6 +43,7 @@ jobs:
           target: "/home/ubuntu/"
           strip_components: 1
 
+      # 5. Configurar la EC2 y desplegar en Tomcat
       - name: Configure environment variables and deploy
         uses: appleboy/ssh-action@master
         with:
@@ -46,15 +51,21 @@ jobs:
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_PRIVATE_KEY }}
           script: |
-            # CORRECCIÓN 2: Uso de tee -a con sudo para persistencia correcta
+            # Inyectar las variables de base de datos en el sistema para que Tomcat las reconozca
             echo "DB_ENDPOINT=${{ secrets.DB_ENDPOINT }}" | sudo tee -a /etc/environment
             echo "DB_USERNAME=${{ secrets.DB_USERNAME }}" | sudo tee -a /etc/environment
             echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" | sudo tee -a /etc/environment
-
-            # CORRECCIÓN 3: Despliegue en la ruta correcta de Tomcat 10
-            # Asegúrate de que el nombre del .war coincida con el generado en el build
-            sudo mv /home/ubuntu/demo-0.0.1-SNAPSHOT.war /var/lib/tomcat10/webapps/demo.war
             
+            # Recargar las variables en la sesión actual
+            export $(cat /etc/environment | xargs)
+
+            # Mover el archivo .war a la carpeta de despliegue de Tomcat
+            # Asegúrate de que el nombre demo-0.0.1-SNAPSHOT.war sea el correcto según tu pom.xml
+            sudo mv /home/ubuntu/demo-0.0.1-SNAPSHOT.war /var/lib/tomcat10/webapps/demo.war
+
+            # Ajustar permisos para el usuario tomcat
             sudo chown tomcat:tomcat /var/lib/tomcat10/webapps/demo.war
             sudo chmod 755 /var/lib/tomcat10/webapps/demo.war
+
+            # Reiniciar Tomcat para aplicar cambios
             sudo systemctl restart tomcat10
